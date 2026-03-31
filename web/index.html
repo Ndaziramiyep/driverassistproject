@@ -33,6 +33,107 @@
   <link rel="manifest" href="manifest.json">
 </head>
 <body>
-  <script src="flutter_bootstrap.js" async></script>
+  <script>
+    async function readEnvApiKey() {
+      const candidates = ['assets/.env', '.env'];
+      for (const path of candidates) {
+        try {
+          const response = await fetch(path, { cache: 'no-store' });
+          if (!response.ok) continue;
+          const text = await response.text();
+          const match = text.match(/^\s*GOOGLEMAP_API_KEY\s*=\s*(.+)\s*$/m);
+          if (match && match[1]) {
+            return match[1].trim().replace(/^['\"]|['\"]$/g, '');
+          }
+        } catch (_) {
+          // Try next candidate.
+        }
+      }
+      return '';
+    }
+
+    async function bootstrapFlutter() {
+      const apiKey = await readEnvApiKey();
+      if (apiKey) {
+        try {
+          await new Promise((resolve, reject) => {
+            const script = document.createElement('script');
+            script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&libraries=places`;
+            script.defer = true;
+            script.onload = resolve;
+            script.onerror = reject;
+            document.head.appendChild(script);
+          });
+
+          window.driverAssistNearbySearch = function (
+            lat,
+            lng,
+            radiusMeters,
+            includedType,
+            maxResults,
+          ) {
+            return new Promise((resolve, reject) => {
+              try {
+                if (!window.google || !google.maps || !google.maps.places) {
+                  reject(new Error('Google Maps Places library is not available'));
+                  return;
+                }
+
+                const service = new google.maps.places.PlacesService(
+                  document.createElement('div'),
+                );
+
+                service.nearbySearch(
+                  {
+                    location: new google.maps.LatLng(lat, lng),
+                    radius: String(radiusMeters),
+                    type: includedType,
+                  },
+                  (results, status) => {
+                    if (
+                      status !== google.maps.places.PlacesServiceStatus.OK &&
+                      status !== google.maps.places.PlacesServiceStatus.ZERO_RESULTS
+                    ) {
+                      reject(new Error(`PlacesService returned ${status}`));
+                      return;
+                    }
+
+                    const mapped = (results || [])
+                      .slice(0, Number(maxResults) || 20)
+                      .map((place) => ({
+                        id: place.place_id || '',
+                        name: place.name || '',
+                        latitude:
+                          place.geometry && place.geometry.location
+                            ? place.geometry.location.lat()
+                            : null,
+                        longitude:
+                          place.geometry && place.geometry.location
+                            ? place.geometry.location.lng()
+                            : null,
+                      }))
+                      .filter((p) => p.id && p.latitude != null && p.longitude != null);
+
+                    resolve(mapped);
+                  },
+                );
+              } catch (error) {
+                reject(error);
+              }
+            });
+          };
+        } catch (_) {
+          // Flutter app can still start; map widget will report its own runtime error.
+        }
+      }
+
+      const flutterScript = document.createElement('script');
+      flutterScript.src = 'flutter_bootstrap.js';
+      flutterScript.async = true;
+      document.body.appendChild(flutterScript);
+    }
+
+    bootstrapFlutter();
+  </script>
 </body>
 </html>

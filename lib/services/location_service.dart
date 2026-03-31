@@ -1,8 +1,13 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:geocoding/geocoding.dart';
 import 'package:http/http.dart' as http;
+
+import 'web_places_bridge_stub.dart'
+    if (dart.library.js_interop) 'web_places_bridge.dart';
 
 class NearbyPlace {
   final String id;
@@ -23,11 +28,7 @@ class NearbyPlace {
 }
 
 class LocationService {
-  static const List<String> _overpassEndpoints = [
-    'https://overpass-api.de/api/interpreter',
-    'https://overpass.kumi.systems/api/interpreter',
-    'https://lz4.overpass-api.de/api/interpreter',
-  ];
+  static const String _placesNearbyPath = '/maps/api/place/nearbysearch/json';
 
   Future<bool> requestPermission() async {
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
@@ -113,150 +114,166 @@ class LocationService {
     int radiusMeters = 3000,
     int maxResults = 20,
   }) async {
-    final query = '''
-[out:json][timeout:12];
-(
-  node["amenity"="fuel"](around:$radiusMeters,$lat,$lng);
-  node["amenity"="car_repair"](around:$radiusMeters,$lat,$lng);
-  node["shop"="car_repair"](around:$radiusMeters,$lat,$lng);
-);
-out body;
-''';
-
-    final decoded = await _fetchNearbyRaw(lat, lng, query);
-    final elements = (decoded['elements'] as List<dynamic>? ?? const [])
-        .whereType<Map<String, dynamic>>();
-
-    final places = <NearbyPlace>[];
-    for (final el in elements) {
-      final tags = (el['tags'] as Map?)?.cast<String, dynamic>() ?? {};
-      final latVal = (el['lat'] ?? (el['center'] as Map?)?['lat']) as num?;
-      final lngVal = (el['lon'] ?? (el['center'] as Map?)?['lon']) as num?;
-      if (latVal == null || lngVal == null) continue;
-
-      final amenity = (tags['amenity'] ?? '').toString();
-      final shop = (tags['shop'] ?? '').toString();
-      final type = amenity == 'fuel' ? 'fuel' : 'garage';
-      if (type == 'garage' &&
-          !(shop == 'car_repair' || amenity == 'car_repair')) {
-        continue;
-      }
-
-      final pLat = latVal.toDouble();
-      final pLng = lngVal.toDouble();
-      final dist = Geolocator.distanceBetween(lat, lng, pLat, pLng);
-
-      places.add(
-        NearbyPlace(
-          id: '${el['type']}-${el['id']}',
-          name: (tags['name'] ?? (type == 'fuel' ? 'Fuel Station' : 'Garage'))
-              .toString(),
-          type: type,
-          latitude: pLat,
-          longitude: pLng,
-          distanceMeters: dist,
-        ),
-      );
+    final apiKey = dotenv.env['GOOGLEMAP_API_KEY']?.trim();
+    if (apiKey == null || apiKey.isEmpty) {
+      throw Exception('GOOGLEMAP_API_KEY is missing in .env');
     }
 
-    places.sort((a, b) => a.distanceMeters.compareTo(b.distanceMeters));
+    final placeById = <String, NearbyPlace>{};
+
+    final fuel = kIsWeb
+        ? await _fetchNearbyByTypeV1(
+            lat: lat,
+            lng: lng,
+            radiusMeters: radiusMeters,
+            includedType: 'gas_station',
+            mappedType: 'fuel',
+          )
+        : await _fetchNearbyByType(
+            lat: lat,
+            lng: lng,
+            radiusMeters: radiusMeters,
+            apiKey: apiKey,
+            type: 'gas_station',
+            mappedType: 'fuel',
+          );
+    for (final place in fuel) {
+      placeById[place.id] = place;
+    }
+
+    final garages = kIsWeb
+        ? await _fetchNearbyByTypeV1(
+            lat: lat,
+            lng: lng,
+            radiusMeters: radiusMeters,
+            includedType: 'car_repair',
+            mappedType: 'garage',
+          )
+        : await _fetchNearbyByType(
+            lat: lat,
+            lng: lng,
+            radiusMeters: radiusMeters,
+            apiKey: apiKey,
+            type: 'car_repair',
+            mappedType: 'garage',
+          );
+    for (final place in garages) {
+      placeById[place.id] = place;
+    }
+
+    final places = placeById.values.toList()
+      ..sort((a, b) => a.distanceMeters.compareTo(b.distanceMeters));
+
     if (places.length > maxResults) {
       return places.take(maxResults).toList();
     }
     return places;
   }
 
-  Future<Map<String, dynamic>> _fetchNearbyRaw(
-    double lat,
-    double lng,
-    String overpassQuery,
-  ) async {
-    String? lastError;
+  Future<List<NearbyPlace>> _fetchNearbyByType({
+    required double lat,
+    required double lng,
+    required int radiusMeters,
+    required String apiKey,
+    required String type,
+    required String mappedType,
+  }) async {
+    final uri = Uri.https('maps.googleapis.com', _placesNearbyPath, {
+      'location': '$lat,$lng',
+      'radius': '$radiusMeters',
+      'type': type,
+      'key': apiKey,
+    });
 
-    for (final endpoint in _overpassEndpoints) {
-      try {
-        final response = await http.post(
-          Uri.parse(endpoint),
-          headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-          body: {'data': overpassQuery},
-        ).timeout(const Duration(seconds: 20));
-
-        if (response.statusCode == 200) {
-          return jsonDecode(response.body) as Map<String, dynamic>;
-        }
-        lastError = 'Endpoint returned ${response.statusCode}';
-      } catch (e) {
-        lastError = e.toString();
-      }
+    final response = await http.get(uri).timeout(const Duration(seconds: 20));
+    if (response.statusCode != 200) {
+      throw Exception(
+        'Google Places request failed (${response.statusCode}) for $type',
+      );
     }
 
-    final fallback = await _fetchNearbyFromNominatim(lat, lng);
-    if (fallback != null) return fallback;
+    final decoded = jsonDecode(response.body) as Map<String, dynamic>;
+    final status = (decoded['status'] ?? '').toString();
+    if (status != 'OK' && status != 'ZERO_RESULTS') {
+      final errorMessage = (decoded['error_message'] ?? '').toString();
+      throw Exception(
+        'Google Places returned $status${errorMessage.isNotEmpty ? ': $errorMessage' : ''}',
+      );
+    }
 
-    throw Exception(
-      'Nearby services request failed. Check internet and try again. ${lastError ?? ''}',
-    );
+    final results = (decoded['results'] as List<dynamic>? ?? const [])
+        .whereType<Map<String, dynamic>>();
+
+    final places = <NearbyPlace>[];
+    for (final result in results) {
+      final geometry = (result['geometry'] as Map?)?.cast<String, dynamic>();
+      final location =
+          (geometry?['location'] as Map?)?.cast<String, dynamic>() ?? {};
+
+      final latVal = (location['lat'] as num?)?.toDouble();
+      final lngVal = (location['lng'] as num?)?.toDouble();
+      if (latVal == null || lngVal == null) continue;
+
+      final placeId = (result['place_id'] ?? '').toString();
+      if (placeId.isEmpty) continue;
+
+      places.add(
+        NearbyPlace(
+          id: placeId,
+          name: (result['name'] ??
+                  (mappedType == 'fuel' ? 'Fuel Station' : 'Garage'))
+              .toString(),
+          type: mappedType,
+          latitude: latVal,
+          longitude: lngVal,
+          distanceMeters: Geolocator.distanceBetween(lat, lng, latVal, lngVal),
+        ),
+      );
+    }
+
+    return places;
   }
 
-  Future<Map<String, dynamic>?> _fetchNearbyFromNominatim(
-    double lat,
-    double lng,
-  ) async {
-    try {
-      final d = 0.03;
-      final left = (lng - d).toStringAsFixed(6);
-      final right = (lng + d).toStringAsFixed(6);
-      final top = (lat + d).toStringAsFixed(6);
-      final bottom = (lat - d).toStringAsFixed(6);
-      final box = '$left,$top,$right,$bottom';
+  Future<List<NearbyPlace>> _fetchNearbyByTypeV1({
+    required double lat,
+    required double lng,
+    required int radiusMeters,
+    required String includedType,
+    required String mappedType,
+  }) async {
+    final placesData = await searchNearbyPlacesWeb(
+      lat: lat,
+      lng: lng,
+      radiusMeters: radiusMeters,
+      includedType: includedType,
+      maxResults: 20,
+    );
 
-      Future<List<dynamic>> search(String q) async {
-        final uri = Uri.https('nominatim.openstreetmap.org', '/search', {
-          'q': q,
-          'format': 'jsonv2',
-          'limit': '10',
-          'bounded': '1',
-          'viewbox': box,
-        });
-        final resp = await http.get(uri).timeout(const Duration(seconds: 15));
-        if (resp.statusCode != 200) return [];
-        return (jsonDecode(resp.body) as List<dynamic>?) ?? [];
-      }
+    final places = <NearbyPlace>[];
+    for (final result in placesData) {
+      final latVal = (result['latitude'] as num?)?.toDouble();
+      final lngVal = (result['longitude'] as num?)?.toDouble();
+      if (latVal == null || lngVal == null) continue;
 
-      final fuels = await search('fuel station');
-      final garages = await search('garage car repair');
+      final placeId = (result['id'] ?? '').toString();
+      if (placeId.isEmpty) continue;
 
-      final elements = <Map<String, dynamic>>[];
-      for (final item in fuels) {
-        if (item is! Map<String, dynamic>) continue;
-        elements.add({
-          'type': 'node',
-          'id': item['place_id'] ?? item['osm_id'],
-          'lat': double.tryParse(item['lat'].toString()),
-          'lon': double.tryParse(item['lon'].toString()),
-          'tags': {
-            'amenity': 'fuel',
-            'name': item['name'] ?? item['display_name'] ?? 'Fuel Station',
-          },
-        });
-      }
-      for (final item in garages) {
-        if (item is! Map<String, dynamic>) continue;
-        elements.add({
-          'type': 'node',
-          'id': item['place_id'] ?? item['osm_id'],
-          'lat': double.tryParse(item['lat'].toString()),
-          'lon': double.tryParse(item['lon'].toString()),
-          'tags': {
-            'shop': 'car_repair',
-            'name': item['name'] ?? item['display_name'] ?? 'Garage',
-          },
-        });
-      }
+      final displayName = (result['name'] ?? '').toString();
 
-      return {'elements': elements};
-    } catch (_) {
-      return null;
+      places.add(
+        NearbyPlace(
+          id: placeId,
+          name: displayName.isEmpty
+              ? (mappedType == 'fuel' ? 'Fuel Station' : 'Garage')
+              : displayName,
+          type: mappedType,
+          latitude: latVal,
+          longitude: lngVal,
+          distanceMeters: Geolocator.distanceBetween(lat, lng, latVal, lngVal),
+        ),
+      );
     }
+
+    return places;
   }
 }

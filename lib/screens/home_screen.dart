@@ -209,8 +209,9 @@ class _HomeScreenState extends State<HomeScreen> {
                     'Type: ${place.type == 'fuel' ? 'Fuel Station' : 'Garage'}'),
                 Text(
                     'Distance: ${(place.distanceMeters / 1000).toStringAsFixed(2)} km'),
-                Text('Latitude: ${place.latitude.toStringAsFixed(6)}'),
-                Text('Longitude: ${place.longitude.toStringAsFixed(6)}'),
+                Text(
+                  'Address: ${place.address.trim().isEmpty ? 'Address not available' : place.address}',
+                ),
                 Text('Place ID: ${place.id}'),
               ],
             ),
@@ -333,7 +334,10 @@ class _HomeScreenState extends State<HomeScreen> {
                                 BitmapDescriptor.defaultMarkerWithHue(
                                   BitmapDescriptor.hueAzure,
                                 ),
-                            infoWindow: const InfoWindow(title: 'You are here'),
+                            infoWindow: InfoWindow(
+                              title: 'Your current location',
+                              snippet: location.currentAddress,
+                            ),
                           ),
                           ...(_hasSearchedNearby
                                   ? visiblePlaces
@@ -486,7 +490,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                     title: Text(place.name),
                     subtitle: Text(
-                      '${place.type == 'fuel' ? 'Fuel Station' : 'Garage'} • ${(place.distanceMeters / 1000).toStringAsFixed(2)} km\nLat: ${place.latitude.toStringAsFixed(5)}, Lng: ${place.longitude.toStringAsFixed(5)}',
+                      '${place.type == 'fuel' ? 'Fuel Station' : 'Garage'} • ${(place.distanceMeters / 1000).toStringAsFixed(2)} km\n${place.address.trim().isEmpty ? 'Address not available' : place.address}',
                     ),
                     isThreeLine: true,
                     onTap: () => _showPlaceDetails(place),

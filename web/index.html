@@ -103,6 +103,7 @@
                       .map((place) => ({
                         id: place.place_id || '',
                         name: place.name || '',
+                        address: place.vicinity || place.formatted_address || '',
                         latitude:
                           place.geometry && place.geometry.location
                             ? place.geometry.location.lat()

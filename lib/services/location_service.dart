@@ -12,6 +12,7 @@ import 'web_places_bridge_stub.dart'
 class NearbyPlace {
   final String id;
   final String name;
+  final String address;
   final String type;
   final double latitude;
   final double longitude;
@@ -20,6 +21,7 @@ class NearbyPlace {
   const NearbyPlace({
     required this.id,
     required this.name,
+    required this.address,
     required this.type,
     required this.latitude,
     required this.longitude,
@@ -82,11 +84,41 @@ class LocationService {
       ].where((p) => p != null && p.isNotEmpty).toList();
 
       if (parts.isEmpty) {
-        return 'Unknown area';
+        return await _reverseGeocodeWithGoogle(lat, lng);
       }
 
       return parts.join(', ');
     } catch (e) {
+      return await _reverseGeocodeWithGoogle(lat, lng);
+    }
+  }
+
+  Future<String> _reverseGeocodeWithGoogle(double lat, double lng) async {
+    final apiKey = dotenv.env['GOOGLEMAP_API_KEY']?.trim();
+    if (apiKey == null || apiKey.isEmpty) {
+      return 'Unknown area';
+    }
+
+    final uri = Uri.https('maps.googleapis.com', '/maps/api/geocode/json', {
+      'latlng': '$lat,$lng',
+      'key': apiKey,
+    });
+
+    try {
+      final response = await http.get(uri).timeout(const Duration(seconds: 20));
+      if (response.statusCode != 200) return 'Unknown area';
+
+      final decoded = jsonDecode(response.body) as Map<String, dynamic>;
+      final status = (decoded['status'] ?? '').toString();
+      if (status != 'OK') return 'Unknown area';
+
+      final results = decoded['results'] as List<dynamic>? ?? const [];
+      if (results.isEmpty) return 'Unknown area';
+
+      final first = results.first as Map<String, dynamic>;
+      final formatted = (first['formatted_address'] ?? '').toString().trim();
+      return formatted.isEmpty ? 'Unknown area' : formatted;
+    } catch (_) {
       return 'Unknown area';
     }
   }
@@ -223,6 +255,8 @@ class LocationService {
           name: (result['name'] ??
                   (mappedType == 'fuel' ? 'Fuel Station' : 'Garage'))
               .toString(),
+          address: (result['vicinity'] ?? result['formatted_address'] ?? '')
+              .toString(),
           type: mappedType,
           latitude: latVal,
           longitude: lngVal,
@@ -266,6 +300,7 @@ class LocationService {
           name: displayName.isEmpty
               ? (mappedType == 'fuel' ? 'Fuel Station' : 'Garage')
               : displayName,
+          address: (result['address'] ?? result['vicinity'] ?? '').toString(),
           type: mappedType,
           latitude: latVal,
           longitude: lngVal,

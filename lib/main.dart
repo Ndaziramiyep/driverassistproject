@@ -21,6 +21,7 @@ import 'screens/login_screen.dart';
 import 'screens/main_navigation_screen.dart';
 import 'screens/maintenance_detail_screen.dart';
 import 'screens/maintenance_screen.dart';
+import 'screens/nearby_services_screen.dart';
 import 'screens/notifications_screen.dart';
 import 'screens/onboarding_screen.dart';
 import 'screens/profile_screen.dart';
@@ -95,6 +96,7 @@ class DriverAssistApp extends StatelessWidget {
               AppRoutes.notifications: (_) => const NotificationsScreen(),
               AppRoutes.emergencyContacts: (_) =>
                   const EmergencyContactsScreen(),
+              AppRoutes.nearbyServices: (_) => const NearbyServicesScreen(),
             },
             onUnknownRoute: (_) => MaterialPageRoute(
               settings: const RouteSettings(name: AppRoutes.splash),

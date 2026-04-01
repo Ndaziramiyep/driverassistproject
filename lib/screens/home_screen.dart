@@ -78,7 +78,7 @@ class _HomeScreenState extends State<HomeScreen> {
         await recorder.endRecording().toImage(size.toInt(), size.toInt());
     final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
     if (byteData == null) return BitmapDescriptor.defaultMarker;
-    return BitmapDescriptor.fromBytes(byteData.buffer.asUint8List());
+    return BitmapDescriptor.bytes(byteData.buffer.asUint8List());
   }
 
   String _greeting() {

@@ -20,6 +20,7 @@ class AppRoutes {
   static const String chat = '/chat';
   static const String notifications = '/notifications';
   static const String emergencyContacts = '/emergency-contacts';
+  static const String nearbyServices = '/nearby-services';
 }
 
 class AppConstants {

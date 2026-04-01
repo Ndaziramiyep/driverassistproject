@@ -1,13 +1,13 @@
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:provider/provider.dart';
 
+import '../providers/auth_provider.dart';
 import '../providers/location_provider.dart';
-import '../services/location_service.dart';
 import '../utils/constants.dart';
-import '../widgets/custom_button.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -17,60 +17,25 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  final LocationService _locationService = LocationService();
   GoogleMapController? _mapController;
-  List<NearbyPlace> _nearbyPlaces = [];
-  String _activeServiceFilter = 'all';
-  bool _isLoadingPlaces = false;
-  bool _hasSearchedNearby = false;
-  String? _placesError;
-  BitmapDescriptor? _fuelMarkerIcon;
-  BitmapDescriptor? _garageMarkerIcon;
   BitmapDescriptor? _currentMarkerIcon;
-  BitmapDescriptor? _nearestFuelMarkerIcon;
-  BitmapDescriptor? _nearestGarageMarkerIcon;
 
   @override
   void initState() {
     super.initState();
-    _prepareMarkerIcons();
+    _prepareMarkerIcon();
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await context.read<LocationProvider>().getCurrentLocation();
     });
   }
 
-  Future<void> _prepareMarkerIcons() async {
-    final icons = await Future.wait([
-      _createMarkerIcon(
-        icon: Icons.local_gas_station,
-        backgroundColor: const Color(0xFFFF9800),
-      ),
-      _createMarkerIcon(
-        icon: Icons.car_repair,
-        backgroundColor: const Color(0xFF43A047),
-      ),
-      _createMarkerIcon(
-        icon: Icons.my_location,
-        backgroundColor: const Color(0xFF1E88E5),
-      ),
-      _createMarkerIcon(
-        icon: Icons.local_gas_station,
-        backgroundColor: const Color(0xFFE53935),
-      ),
-      _createMarkerIcon(
-        icon: Icons.car_repair,
-        backgroundColor: const Color(0xFFD81B60),
-      ),
-    ]);
-
+  Future<void> _prepareMarkerIcon() async {
+    final icon = await _createMarkerIcon(
+      icon: Icons.my_location,
+      backgroundColor: const Color(0xFF1E88E5),
+    );
     if (!mounted) return;
-    setState(() {
-      _fuelMarkerIcon = icons[0];
-      _garageMarkerIcon = icons[1];
-      _currentMarkerIcon = icons[2];
-      _nearestFuelMarkerIcon = icons[3];
-      _nearestGarageMarkerIcon = icons[4];
-    });
+    setState(() => _currentMarkerIcon = icon);
   }
 
   Future<BitmapDescriptor> _createMarkerIcon({
@@ -112,405 +77,254 @@ class _HomeScreenState extends State<HomeScreen> {
     final image =
         await recorder.endRecording().toImage(size.toInt(), size.toInt());
     final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
-
-    if (byteData == null) {
-      return BitmapDescriptor.defaultMarker;
-    }
-
+    if (byteData == null) return BitmapDescriptor.defaultMarker;
     return BitmapDescriptor.fromBytes(byteData.buffer.asUint8List());
   }
 
-  Future<void> _loadNearbyPlaces() async {
-    final position = context.read<LocationProvider>().currentPosition;
-    if (position == null) return;
-
-    setState(() {
-      _hasSearchedNearby = true;
-      _isLoadingPlaces = true;
-      _placesError = null;
-    });
-
-    try {
-      final places = await _locationService.fetchNearbyFuelAndGarages(
-        position.latitude,
-        position.longitude,
-      );
-      if (!mounted) return;
-      setState(() {
-        _nearbyPlaces = places;
-        _activeServiceFilter = 'all';
-      });
-      if (places.isNotEmpty) {
-        _fitMapToPlaces(position.latitude, position.longitude, places);
-      }
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _placesError =
-          'Unable to load nearby services right now. Please try again.');
-    } finally {
-      if (mounted) setState(() => _isLoadingPlaces = false);
-    }
-  }
-
-  List<NearbyPlace> get _visiblePlaces {
-    if (_activeServiceFilter == 'fuel') {
-      return _nearbyPlaces.where((p) => p.type == 'fuel').toList();
-    }
-    if (_activeServiceFilter == 'garage') {
-      return _nearbyPlaces.where((p) => p.type == 'garage').toList();
-    }
-    return _nearbyPlaces;
-  }
-
-  void _toggleFilter(String nextFilter) {
-    final position = context.read<LocationProvider>().currentPosition;
-    setState(() {
-      _activeServiceFilter =
-          _activeServiceFilter == nextFilter ? 'all' : nextFilter;
-    });
-
-    if (position != null && _visiblePlaces.isNotEmpty) {
-      _fitMapToPlaces(position.latitude, position.longitude, _visiblePlaces);
-    }
-  }
-
-  void _showPlaceDetails(NearbyPlace place) {
-    showModalBottomSheet(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
-      ),
-      builder: (context) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Icon(
-                      place.type == 'fuel'
-                          ? Icons.local_gas_station
-                          : Icons.car_repair,
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        place.name,
-                        style: Theme.of(context).textTheme.titleMedium,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                Text(
-                    'Type: ${place.type == 'fuel' ? 'Fuel Station' : 'Garage'}'),
-                Text(
-                    'Distance: ${(place.distanceMeters / 1000).toStringAsFixed(2)} km'),
-                Text(
-                  'Address: ${place.address.trim().isEmpty ? 'Address not available' : place.address}',
-                ),
-                Text('Place ID: ${place.id}'),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  NearbyPlace? get _nearestFuel {
-    final fuel = _nearbyPlaces.where((p) => p.type == 'fuel').toList();
-    if (fuel.isEmpty) return null;
-    fuel.sort((a, b) => a.distanceMeters.compareTo(b.distanceMeters));
-    return fuel.first;
-  }
-
-  NearbyPlace? get _nearestGarage {
-    final garages = _nearbyPlaces.where((p) => p.type == 'garage').toList();
-    if (garages.isEmpty) return null;
-    garages.sort((a, b) => a.distanceMeters.compareTo(b.distanceMeters));
-    return garages.first;
-  }
-
-  void _fitMapToPlaces(
-      double userLat, double userLng, List<NearbyPlace> places) {
-    if (_mapController == null) return;
-
-    double minLat = userLat;
-    double maxLat = userLat;
-    double minLng = userLng;
-    double maxLng = userLng;
-
-    for (final place in places) {
-      if (place.latitude < minLat) minLat = place.latitude;
-      if (place.latitude > maxLat) maxLat = place.latitude;
-      if (place.longitude < minLng) minLng = place.longitude;
-      if (place.longitude > maxLng) maxLng = place.longitude;
-    }
-
-    _mapController!.animateCamera(
-      CameraUpdate.newLatLngBounds(
-        LatLngBounds(
-          southwest: LatLng(minLat, minLng),
-          northeast: LatLng(maxLat, maxLng),
-        ),
-        70,
-      ),
-    );
+  String _greeting() {
+    final hour = DateTime.now().hour;
+    if (hour < 12) return 'Good Morning';
+    if (hour < 17) return 'Good Afternoon';
+    return 'Good Evening';
   }
 
   @override
   Widget build(BuildContext context) {
     final location = context.watch<LocationProvider>();
+    final user = context.watch<AuthProvider>().currentUser;
     final position = location.currentPosition;
-    final visiblePlaces = _visiblePlaces;
-    final nearestFuel = _activeServiceFilter == 'garage' ? null : _nearestFuel;
-    final nearestGarage =
-        _activeServiceFilter == 'fuel' ? null : _nearestGarage;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('DriverAssist Home')),
-      body: RefreshIndicator(
-        onRefresh: _loadNearbyPlaces,
-        child: ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            Card(
+      body: Stack(
+        children: [
+          // ── Full-screen map ──────────────────────────────────────────
+          Positioned.fill(
+            child: position == null
+                ? Container(
+                    color: isDark
+                        ? const Color(0xFF181A20)
+                        : const Color(0xFFE8F0FE),
+                    child: const Center(child: CircularProgressIndicator()),
+                  )
+                : GoogleMap(
+                    onMapCreated: (c) => _mapController = c,
+                    initialCameraPosition: CameraPosition(
+                      target: LatLng(position.latitude, position.longitude),
+                      zoom: 15,
+                    ),
+                    myLocationEnabled: true,
+                    myLocationButtonEnabled: false,
+                    zoomControlsEnabled: false,
+                    mapToolbarEnabled: false,
+                    circles: {
+                      Circle(
+                        circleId: const CircleId('radius'),
+                        center: LatLng(position.latitude, position.longitude),
+                        radius: 120,
+                        fillColor: const Color(0x221E88E5),
+                        strokeColor: const Color(0x881E88E5),
+                        strokeWidth: 2,
+                      ),
+                    },
+                    markers: {
+                      Marker(
+                        markerId: const MarkerId('me'),
+                        position: LatLng(position.latitude, position.longitude),
+                        icon: _currentMarkerIcon ??
+                            BitmapDescriptor.defaultMarkerWithHue(
+                                BitmapDescriptor.hueAzure),
+                        infoWindow: InfoWindow(
+                          title: 'You are here',
+                          snippet: location.currentAddress,
+                        ),
+                      ),
+                    },
+                  ),
+          ),
+
+          // ── Top header overlay ───────────────────────────────────────
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: SafeArea(
               child: Padding(
-                padding: const EdgeInsets.all(16),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      'Current Location',
-                      style: Theme.of(context).textTheme.titleMedium,
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _glassCard(
+                            isDark: isDark,
+                            child: Row(
+                              children: [
+                                const Icon(Icons.waving_hand_rounded,
+                                    size: 16, color: Color(0xFFFFA726)),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    '${_greeting()}, ${user?.displayName.split(' ').first ?? 'Driver'}',
+                                    style: GoogleFonts.poppins(
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 13,
+                                    ),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        _glassIconBtn(
+                          icon: Icons.notifications_outlined,
+                          isDark: isDark,
+                          onTap: () => Navigator.pushNamed(
+                              context, AppRoutes.notifications),
+                        ),
+                      ],
                     ),
                     const SizedBox(height: 8),
-                    if (location.isLoading)
-                      const LinearProgressIndicator()
-                    else
-                      Text(location.currentAddress),
+                    _glassCard(
+                      isDark: isDark,
+                      child: Row(
+                        children: [
+                          if (location.isLoading)
+                            const SizedBox(
+                              width: 14,
+                              height: 14,
+                              child:
+                                  CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          else
+                            const Icon(Icons.location_on,
+                                size: 15, color: Color(0xFF1E88E5)),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              location.isLoading
+                                  ? 'Getting location...'
+                                  : location.currentAddress,
+                              style: GoogleFonts.poppins(fontSize: 12),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   ],
                 ),
               ),
             ),
-            const SizedBox(height: 16),
-            SizedBox(
-              height: 320,
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(12),
-                child: position == null
-                    ? const Center(child: Text('Location unavailable'))
-                    : GoogleMap(
-                        onMapCreated: (controller) =>
-                            _mapController = controller,
-                        initialCameraPosition: CameraPosition(
-                          target: LatLng(position.latitude, position.longitude),
-                          zoom: 14,
-                        ),
-                        myLocationEnabled: true,
-                        myLocationButtonEnabled: true,
-                        zoomControlsEnabled: false,
-                        circles: {
-                          Circle(
-                            circleId: const CircleId('current-location-radius'),
-                            center:
-                                LatLng(position.latitude, position.longitude),
-                            radius: 120,
-                            fillColor: const Color(0x331E88E5),
-                            strokeColor: const Color(0xAA1E88E5),
-                            strokeWidth: 2,
-                          ),
-                        },
-                        markers: {
-                          Marker(
-                            markerId: const MarkerId('current-location'),
-                            position:
-                                LatLng(position.latitude, position.longitude),
-                            icon: _currentMarkerIcon ??
-                                BitmapDescriptor.defaultMarkerWithHue(
-                                  BitmapDescriptor.hueAzure,
-                                ),
-                            infoWindow: InfoWindow(
-                              title: 'Your current location',
-                              snippet: location.currentAddress,
-                            ),
-                          ),
-                          ...(_hasSearchedNearby
-                                  ? visiblePlaces
-                                  : <NearbyPlace>[])
-                              .map((place) {
-                            final isNearestFuel = place.id == nearestFuel?.id;
-                            final isNearestGarage =
-                                place.id == nearestGarage?.id;
+          ),
 
-                            return Marker(
-                              markerId: MarkerId(place.id),
-                              position: LatLng(place.latitude, place.longitude),
-                              icon: isNearestFuel
-                                  ? (_nearestFuelMarkerIcon ??
-                                      BitmapDescriptor.defaultMarkerWithHue(
-                                        BitmapDescriptor.hueRed,
-                                      ))
-                                  : isNearestGarage
-                                      ? (_nearestGarageMarkerIcon ??
-                                          BitmapDescriptor.defaultMarkerWithHue(
-                                            BitmapDescriptor.hueRose,
-                                          ))
-                                      : place.type == 'fuel'
-                                          ? (_fuelMarkerIcon ??
-                                              BitmapDescriptor
-                                                  .defaultMarkerWithHue(
-                                                BitmapDescriptor.hueOrange,
-                                              ))
-                                          : (_garageMarkerIcon ??
-                                              BitmapDescriptor
-                                                  .defaultMarkerWithHue(
-                                                BitmapDescriptor.hueGreen,
-                                              )),
-                              infoWindow: InfoWindow(
-                                title: place.name,
-                                snippet:
-                                    '${place.type == 'fuel' ? 'Fuel Station' : 'Garage'} • ${(place.distanceMeters / 1000).toStringAsFixed(2)} km',
-                              ),
-                              onTap: () => _showPlaceDetails(place),
-                            );
-                          }),
-                        },
-                      ),
-              ),
+          // ── My-location button ────────────────────────────────────────
+          Positioned(
+            right: 16,
+            bottom: 120,
+            child: _glassIconBtn(
+              icon: Icons.my_location,
+              isDark: isDark,
+              onTap: () {
+                if (position != null) {
+                  _mapController?.animateCamera(
+                    CameraUpdate.newLatLngZoom(
+                        LatLng(position.latitude, position.longitude), 16),
+                  );
+                }
+              },
             ),
-            const SizedBox(height: 12),
-            if (_isLoadingPlaces) const LinearProgressIndicator(),
-            if (_placesError != null)
-              Text(_placesError!,
-                  style: const TextStyle(color: Color(0xFFE53935))),
-            if (!_hasSearchedNearby)
-              const Text(
-                'Tap "Find Nearby Services" to show garages and fuel stations around your current location.',
-              ),
-            if (_hasSearchedNearby && _nearbyPlaces.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  Expanded(
-                    child: FilledButton.icon(
-                      onPressed: () => _toggleFilter('fuel'),
-                      icon: const Icon(Icons.local_gas_station, size: 16),
-                      label: const Text('Fuel'),
-                      style: FilledButton.styleFrom(
-                        backgroundColor: _activeServiceFilter == 'fuel'
-                            ? const Color(0xFFFF9800)
-                            : null,
-                      ),
-                    ),
+          ),
+
+          // ── Nearby Services floating button ──────────────────────────
+          Positioned(
+            left: 16,
+            right: 16,
+            bottom: 24,
+            child: SafeArea(
+              child: ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF1E88E5),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
                   ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: FilledButton.icon(
-                      onPressed: () => _toggleFilter('garage'),
-                      icon: const Icon(Icons.car_repair, size: 16),
-                      label: const Text('Garages'),
-                      style: FilledButton.styleFrom(
-                        backgroundColor: _activeServiceFilter == 'garage'
-                            ? const Color(0xFF43A047)
-                            : null,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 6),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: TextButton.icon(
-                  onPressed: () {
-                    final currentPosition = location.currentPosition;
-                    setState(() => _activeServiceFilter = 'all');
-                    if (currentPosition != null && _nearbyPlaces.isNotEmpty) {
-                      _fitMapToPlaces(
-                        currentPosition.latitude,
-                        currentPosition.longitude,
-                        _nearbyPlaces,
-                      );
-                    }
-                  },
-                  icon: const Icon(Icons.layers, size: 16),
-                  label: const Text('Show all services'),
+                  elevation: 6,
+                  shadowColor:
+                      const Color(0xFF1E88E5).withValues(alpha: 0.4),
                 ),
-              ),
-            ],
-            if (nearestFuel != null || nearestGarage != null)
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  if (nearestFuel != null)
-                    Chip(
-                      avatar: const Icon(Icons.local_gas_station, size: 16),
-                      label: Text(
-                        'Nearest fuel: ${(nearestFuel.distanceMeters / 1000).toStringAsFixed(2)} km',
-                      ),
-                    ),
-                  if (nearestGarage != null)
-                    Chip(
-                      avatar: const Icon(Icons.car_repair, size: 16),
-                      label: Text(
-                        'Nearest garage: ${(nearestGarage.distanceMeters / 1000).toStringAsFixed(2)} km',
-                      ),
-                    ),
-                ],
-              ),
-            const SizedBox(height: 16),
-            SizedBox(
-              width: double.infinity,
-              child: CustomButton(
-                label: 'Find Nearby Services',
-                onPressed: _isLoadingPlaces ? null : _loadNearbyPlaces,
-                icon: Icons.store_mall_directory,
-              ),
-            ),
-            if (_hasSearchedNearby && visiblePlaces.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              Text(
-                'Nearby service details',
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              const SizedBox(height: 8),
-              ...visiblePlaces.map(
-                (place) => Card(
-                  child: ListTile(
-                    leading: Icon(
-                      place.type == 'fuel'
-                          ? Icons.local_gas_station
-                          : Icons.car_repair,
-                    ),
-                    title: Text(place.name),
-                    subtitle: Text(
-                      '${place.type == 'fuel' ? 'Fuel Station' : 'Garage'} • ${(place.distanceMeters / 1000).toStringAsFixed(2)} km\n${place.address.trim().isEmpty ? 'Address not available' : place.address}',
-                    ),
-                    isThreeLine: true,
-                    onTap: () => _showPlaceDetails(place),
+                icon: const Icon(Icons.store_mall_directory_rounded, size: 20),
+                label: Text(
+                  'Find Nearby Services',
+                  style: GoogleFonts.poppins(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 15,
                   ),
                 ),
+                onPressed: () => Navigator.pushNamed(
+                  context,
+                  AppRoutes.nearbyServices,
+                  arguments: position != null
+                      ? {'lat': position.latitude, 'lng': position.longitude}
+                      : null,
+                ),
               ),
-            ],
-            const SizedBox(height: 12),
-            SizedBox(
-              width: double.infinity,
-              child: CustomButton(
-                label: 'Emergency SOS',
-                type: ButtonType.secondary,
-                onPressed: () =>
-                    Navigator.pushNamed(context, AppRoutes.emergency),
-                icon: Icons.warning_amber_rounded,
-              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _glassCard({required bool isDark, required Widget child}) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: isDark
+            ? Colors.black.withValues(alpha: 0.65)
+            : Colors.white.withValues(alpha: 0.92),
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.08),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: child,
+    );
+  }
+
+  Widget _glassIconBtn({
+    required IconData icon,
+    required bool isDark,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 42,
+        height: 42,
+        decoration: BoxDecoration(
+          color: isDark
+              ? Colors.black.withValues(alpha: 0.65)
+              : Colors.white.withValues(alpha: 0.92),
+          shape: BoxShape.circle,
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.1),
+              blurRadius: 6,
+              offset: const Offset(0, 2),
             ),
           ],
         ),
+        child: Icon(icon, size: 20),
       ),
     );
   }
